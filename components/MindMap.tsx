@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import MindElixir, { type MindElixirData, type MindElixirInstance } from "mind-elixir";
+import "mind-elixir/style.css";
 
 interface Props {
   pageId: string;
