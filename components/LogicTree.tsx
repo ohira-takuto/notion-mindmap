@@ -214,7 +214,10 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
           <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
             <Btn theme={theme} onClick={() => addChild(node.id)}>+子</Btn>
             {!isRoot && <Btn theme={theme} onClick={() => addSibling(node.id)}>+兄弟</Btn>}
-            {!isRoot && <Btn theme={theme} onClick={startSummaryMode} highlight>まとめ範囲を選択</Btn>}
+            {/* 兄弟が2つ以上いる場合のみまとめを許可 */}
+            {!isRoot && (() => { const p = findParent(root, node.id); return p && p.children.length >= 2; })() && (
+              <Btn theme={theme} onClick={startSummaryMode} highlight>まとめ</Btn>
+            )}
             {!isRoot && <Btn theme={theme} onClick={() => del(node.id)} danger>✕</Btn>}
           </div>
         )}
@@ -329,46 +332,53 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, s
   const isSummarySelected = selectedId === `summary-sel-${summary.id}`;
   const children = (summary.children ?? []) as ExtNodeObj[];
 
-  // ブラケットの横幅を比率で計算
+  // ブラケット位置を比率で計算（0〜100）
   const total = Math.max(childCount - 1, 1);
-  const lPct = (summary.startIdx / total) * 100;
-  const rPct = (summary.endIdx / total) * 100;
-  const midPct = (lPct + rPct) / 2;
+  const lPct = childCount === 1 ? 10 : (summary.startIdx / total) * 80 + 10;
+  const rPct = childCount === 1 ? 90 : (summary.endIdx / total) * 80 + 10;
+  const mid = (lPct + rPct) / 2;
 
   return (
-    <div style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", marginTop: 2 }}>
-      {/* ブラケットSVG */}
-      <svg width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none" style={{ overflow: "visible", display: "block" }}>
-        {/* 左縦線 */}
-        <line x1={lPct} y1="2" x2={lPct} y2="18" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-        {/* 右縦線 */}
-        <line x1={rPct} y1="2" x2={rPct} y2="18" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-        {/* 横線 */}
-        <line x1={lPct} y1="18" x2={rPct} y2="18" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-        {/* 中央への接続線 */}
-        <line x1={midPct} y1="18" x2={midPct} y2="28" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    <div style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", marginTop: 0 }}>
+      {/* 滑らかなU字ブラケット + 中央接続線 */}
+      <svg
+        width="100%" height="44"
+        viewBox="0 0 100 44" preserveAspectRatio="none"
+        style={{ overflow: "visible", display: "block" }}
+      >
+        {/* U字カーブ：lPctからrPctへ、中央が一番下 */}
+        <path
+          d={`M ${lPct},2 Q ${lPct},36 ${mid},36 Q ${rPct},36 ${rPct},2`}
+          fill="none"
+          stroke={theme.line}
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
+        {/* 中央からまとめノードへの接続線 */}
+        <line
+          x1={mid} y1="36" x2={mid} y2="44"
+          stroke={theme.line} strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
       </svg>
 
-      {/* まとめノード */}
+      {/* まとめノード（角丸長方形） */}
       <div
         onClick={e => { e.stopPropagation(); onSelect(`summary-sel-${summary.id}`); }}
         onDoubleClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}
         style={{
-          display: "flex", alignItems: "center", gap: 6,
-          padding: "6px 16px", borderRadius: 20,
-          background: isSummarySelected ? theme.rootBg : theme.surface,
-          color: isSummarySelected ? theme.rootText : theme.text,
-          border: `2px solid ${theme.line}`,
+          padding: "6px 18px",
+          borderRadius: 8,
+          background: isSummarySelected ? theme.rootBg + "18" : theme.bg,
+          color: isSummarySelected ? theme.rootBg : theme.nodeText,
+          border: `2px solid ${isSummarySelected ? theme.rootBg : theme.line}`,
           cursor: "pointer", userSelect: "none",
-          boxShadow: isSummarySelected
-            ? `0 0 0 3px ${theme.rootBg}33, 0 2px 8px ${theme.line}44`
-            : `0 2px 8px ${theme.line}22`,
-          transition: "all 0.15s",
           fontSize: 13, fontWeight: 600,
+          transition: "all 0.15s",
+          boxShadow: isSummarySelected ? `0 0 0 3px ${theme.rootBg}22` : "none",
+          whiteSpace: "nowrap",
         }}
       >
-        {/* サマリーアイコン */}
-        <span style={{ fontSize: 11, opacity: 0.7 }}>∑</span>
         {isEditingLabel ? (
           <input
             autoFocus value={editState!.value}
@@ -383,7 +393,7 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, s
         ) : summary.label}
       </div>
 
-      {/* 選択時のアクションボタン */}
+      {/* 選択時アクション */}
       {isSummarySelected && (
         <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
           <Btn theme={theme} onClick={onAddChild}>+子ノード</Btn>
@@ -392,7 +402,7 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, s
         </div>
       )}
 
-      {/* サマリーの子ノード */}
+      {/* まとめの子ノード */}
       {children.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
           <div style={{ width: 2, height: 16, background: theme.line }} />
