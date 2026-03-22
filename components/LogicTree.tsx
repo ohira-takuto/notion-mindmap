@@ -4,7 +4,13 @@ import { useRef, useState, useCallback, useEffect, type ReactElement } from "rea
 import { type Theme } from "@/lib/themes";
 import { type MindElixirData, type NodeObj } from "mind-elixir";
 
-interface SummaryRange { id: string; label: string; startIdx: number; endIdx: number; }
+interface SummaryRange {
+  id: string;
+  label: string;
+  startIdx: number;
+  endIdx: number;
+  children: ExtNodeObj[]; // サマリーノードの子
+}
 
 interface ExtNodeObj extends NodeObj {
   summaries?: SummaryRange[];
@@ -18,18 +24,17 @@ interface Props {
 }
 
 interface EditState { id: string; value: string; }
-
-// まとめ選択モードの状態
-interface SummarySelectMode {
-  parentId: string;
-  indices: Set<number>;
-}
+interface SummarySelectMode { parentId: string; indices: Set<number>; }
 
 function clone<T>(v: T): T { return JSON.parse(JSON.stringify(v)); }
 
 function findNode(root: ExtNodeObj, id: string): ExtNodeObj | null {
   if (root.id === id) return root;
   for (const c of root.children ?? []) { const r = findNode(c, id); if (r) return r; }
+  // サマリーの子も探す
+  for (const s of root.summaries ?? []) {
+    for (const c of s.children ?? []) { const r = findNode(c, id); if (r) return r; }
+  }
   return null;
 }
 function findParent(root: ExtNodeObj, id: string): ExtNodeObj | null {
@@ -68,6 +73,16 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
   }, [data, commit]);
 
+  // サマリーに子を追加
+  const addChildToSummary = useCallback((parentNodeId: string, summaryId: string) => {
+    const newId = `node-${Date.now()}`;
+    const u = clone(data);
+    const parent = findNode(u.nodeData as ExtNodeObj, parentNodeId);
+    const s = parent?.summaries?.find(s => s.id === summaryId);
+    if (s) s.children = [...(s.children ?? []), { id: newId, topic: "新しいノード", children: [] }];
+    commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
+  }, [data, commit]);
+
   const addSibling = useCallback((siblingId: string) => {
     const newId = `node-${Date.now()}`;
     const u = clone(data); const parent = findParent(u.nodeData as ExtNodeObj, siblingId);
@@ -82,7 +97,6 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     setSelectedId(null); setSummaryMode(null);
   }, [data, commit]);
 
-  // まとめ選択モードを開始（選択中ノードの親を対象に）
   const startSummaryMode = useCallback(() => {
     if (!selectedId) return;
     const parent = findParent(root, selectedId);
@@ -91,7 +105,6 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     setSummaryMode({ parentId: parent.id, indices: new Set([idx]) });
   }, [selectedId, root]);
 
-  // まとめ選択モードでノードをトグル
   const toggleSummaryNode = useCallback((parentId: string, idx: number) => {
     if (!summaryMode || summaryMode.parentId !== parentId) return;
     const next = new Set(summaryMode.indices);
@@ -99,7 +112,6 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     setSummaryMode({ ...summaryMode, indices: next });
   }, [summaryMode]);
 
-  // まとめ確定
   const createSummary = useCallback(() => {
     if (!summaryMode || summaryMode.indices.size === 0) return;
     const sorted = [...summaryMode.indices].sort((a, b) => a - b);
@@ -110,6 +122,7 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     parent.summaries = [...(parent.summaries ?? []), {
       id: summaryId, label: "まとめ",
       startIdx: sorted[0], endIdx: sorted[sorted.length - 1],
+      children: [],
     }];
     commit(u); setSummaryMode(null);
     setTimeout(() => setEditState({ id: `edit-summary-${summaryId}`, value: "まとめ" }), 50);
@@ -118,7 +131,7 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
   const deleteSummary = useCallback((parentId: string, summaryId: string) => {
     const u = clone(data); const parent = findNode(u.nodeData as ExtNodeObj, parentId);
     if (parent?.summaries) parent.summaries = parent.summaries.filter(s => s.id !== summaryId);
-    commit(u);
+    commit(u); setSelectedId(null);
   }, [data, commit]);
 
   const updateSummaryLabel = useCallback((parentId: string, summaryId: string, label: string) => {
@@ -165,34 +178,20 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
           tabIndex={0}
           onClick={e => {
             e.stopPropagation();
-            if (isInSummaryMode && !isRoot) {
-              toggleSummaryNode(parentId!, childIdx);
-            } else {
-              setSelectedId(node.id);
-            }
+            if (isInSummaryMode && !isRoot) toggleSummaryNode(parentId!, childIdx);
+            else setSelectedId(node.id);
           }}
           onDoubleClick={() => !summaryMode && setEditState({ id: node.id, value: node.topic })}
           style={{
             padding: isRoot ? "10px 20px" : "6px 14px",
             borderRadius: isRoot ? 10 : 6,
-            background: isInSummarySelection
-              ? theme.rootBg + "33"
-              : isRoot ? theme.rootBg : theme.nodeBg,
+            background: isInSummarySelection ? theme.rootBg + "22" : isRoot ? theme.rootBg : theme.nodeBg,
             color: isRoot ? theme.rootText : theme.nodeText,
-            border: `${isSelected || isInSummarySelection ? 2 : 1.5}px solid ${
-              isInSummarySelection ? theme.rootBg
-              : isSelected ? theme.rootBg
-              : theme.border
-            }`,
+            border: `${isSelected || isInSummarySelection ? 2 : 1.5}px solid ${isInSummarySelection ? theme.rootBg : isSelected ? theme.rootBg : theme.border}`,
             cursor: isInSummaryMode && !isRoot ? "crosshair" : "pointer",
-            fontSize: isRoot ? 15 : 13,
-            fontWeight: isRoot ? 700 : 400,
-            whiteSpace: "nowrap",
-            boxShadow: isInSummarySelection
-              ? `0 0 0 3px ${theme.rootBg}44`
-              : isSelected ? `0 0 0 3px ${theme.rootBg}44`
-              : isRoot ? "0 2px 8px rgba(0,0,0,0.2)" : "none",
-            userSelect: "none", outline: "none", transition: "all 0.15s",
+            fontSize: isRoot ? 15 : 13, fontWeight: isRoot ? 700 : 400,
+            whiteSpace: "nowrap", userSelect: "none", outline: "none", transition: "all 0.15s",
+            boxShadow: isInSummarySelection ? `0 0 0 3px ${theme.rootBg}33` : isSelected ? `0 0 0 3px ${theme.rootBg}33` : isRoot ? "0 2px 8px rgba(0,0,0,0.2)" : "none",
           }}
         >
           {isEditing ? (
@@ -211,9 +210,8 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
           ) : node.topic}
         </div>
 
-        {/* ボタン（選択時・サマリーモードでない時） */}
         {isSelected && !isEditing && !summaryMode && (
-          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+          <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
             <Btn theme={theme} onClick={() => addChild(node.id)}>+子</Btn>
             {!isRoot && <Btn theme={theme} onClick={() => addSibling(node.id)}>+兄弟</Btn>}
             {!isRoot && <Btn theme={theme} onClick={startSummaryMode} highlight>まとめ範囲を選択</Btn>}
@@ -221,15 +219,16 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
           </div>
         )}
 
-        {/* 子ノード群 */}
         {(node.children ?? []).length > 0 && (
           <ChildrenWithSummaries
             parent={node} depth={depth} theme={theme}
             editState={editState} setEditState={setEditState}
-            summaryMode={summaryMode}
+            summaryMode={summaryMode} selectedId={selectedId}
             renderNode={renderNode}
             updateSummaryLabel={updateSummaryLabel}
             deleteSummary={deleteSummary}
+            addChildToSummary={addChildToSummary}
+            onSelectSummary={setSelectedId}
           />
         )}
       </div>
@@ -239,9 +238,8 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
   return (
     <div
       style={{ width: "100%", height: "100%", overflow: "auto", display: "flex", flexDirection: "column", alignItems: "center", background: theme.bg }}
-      onClick={e => { if (e.target === e.currentTarget) { setSelectedId(null); } }}
+      onClick={e => { if (e.target === e.currentTarget) setSelectedId(null); }}
     >
-      {/* まとめ選択モードのバナー */}
       {summaryMode && (
         <div style={{
           position: "sticky", top: 0, zIndex: 50, width: "100%",
@@ -249,16 +247,15 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
           padding: "8px 16px", display: "flex", alignItems: "center", gap: 12,
           justifyContent: "center", fontSize: 13,
         }}>
-          <span>まとめたいノードをクリックして選択（{summaryMode.indices.size}個選択中）</span>
-          <button
-            onClick={createSummary}
-            disabled={summaryMode.indices.size < 1}
-            style={{ padding: "4px 14px", borderRadius: 6, border: "none", background: "#fff", color: theme.rootBg, cursor: "pointer", fontWeight: 700, fontSize: 12 }}
-          >まとめ確定</button>
-          <button
-            onClick={() => setSummaryMode(null)}
-            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", cursor: "pointer", fontSize: 12 }}
-          >キャンセル (Esc)</button>
+          <span>まとめたいノードをクリック（{summaryMode.indices.size}個選択中）</span>
+          <button onClick={createSummary} disabled={summaryMode.indices.size < 1}
+            style={{ padding: "4px 14px", borderRadius: 6, border: "none", background: "#fff", color: theme.rootBg, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>
+            まとめ確定
+          </button>
+          <button onClick={() => setSummaryMode(null)}
+            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+            キャンセル (Esc)
+          </button>
         </div>
       )}
 
@@ -275,13 +272,15 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
   );
 }
 
-function ChildrenWithSummaries({ parent, depth, theme, editState, setEditState, summaryMode, renderNode, updateSummaryLabel, deleteSummary }: {
+function ChildrenWithSummaries({ parent, depth, theme, editState, setEditState, summaryMode, selectedId, renderNode, updateSummaryLabel, deleteSummary, addChildToSummary, onSelectSummary }: {
   parent: ExtNodeObj; depth: number; theme: Theme;
   editState: EditState | null; setEditState: (s: EditState | null) => void;
-  summaryMode: SummarySelectMode | null;
-  renderNode: (node: ExtNodeObj, depth: number, parentId: string | null, childIdx: number) => ReactElement;
-  updateSummaryLabel: (parentId: string, summaryId: string, label: string) => void;
-  deleteSummary: (parentId: string, summaryId: string) => void;
+  summaryMode: SummarySelectMode | null; selectedId: string | null;
+  renderNode: (n: ExtNodeObj, d: number, pid: string | null, idx: number) => ReactElement;
+  updateSummaryLabel: (pid: string, sid: string, label: string) => void;
+  deleteSummary: (pid: string, sid: string) => void;
+  addChildToSummary: (pid: string, sid: string) => void;
+  onSelectSummary: (id: string) => void;
 }) {
   const children = (parent.children ?? []) as ExtNodeObj[];
   const summaries = parent.summaries ?? [];
@@ -303,33 +302,73 @@ function ChildrenWithSummaries({ parent, depth, theme, editState, setEditState, 
         <SummaryBracket
           key={summary.id} summary={summary} childCount={children.length}
           theme={theme} editState={editState} setEditState={setEditState}
+          selectedId={selectedId}
+          renderNode={renderNode} depth={depth}
           onUpdateLabel={label => updateSummaryLabel(parent.id, summary.id, label)}
           onDelete={() => deleteSummary(parent.id, summary.id)}
+          onAddChild={() => addChildToSummary(parent.id, summary.id)}
+          onSelect={onSelectSummary}
         />
       ))}
     </div>
   );
 }
 
-function SummaryBracket({ summary, childCount, theme, editState, setEditState, onUpdateLabel, onDelete }: {
+function SummaryBracket({ summary, childCount, theme, editState, setEditState, selectedId, renderNode, depth, onUpdateLabel, onDelete, onAddChild, onSelect }: {
   summary: SummaryRange; childCount: number; theme: Theme;
   editState: EditState | null; setEditState: (s: EditState | null) => void;
-  onUpdateLabel: (label: string) => void; onDelete: () => void;
+  selectedId: string | null;
+  renderNode: (n: ExtNodeObj, d: number, pid: string | null, idx: number) => ReactElement;
+  depth: number;
+  onUpdateLabel: (label: string) => void;
+  onDelete: () => void;
+  onAddChild: () => void;
+  onSelect: (id: string) => void;
 }) {
-  const { startIdx, endIdx } = summary;
-  const leftPct = (startIdx / Math.max(childCount - 1, 1)) * 100;
-  const rightPct = (endIdx / Math.max(childCount - 1, 1)) * 100;
   const isEditingLabel = editState?.id === `edit-summary-${summary.id}`;
+  const isSummarySelected = selectedId === `summary-sel-${summary.id}`;
+  const children = (summary.children ?? []) as ExtNodeObj[];
+
+  // ブラケットの横幅を比率で計算
+  const total = Math.max(childCount - 1, 1);
+  const lPct = (summary.startIdx / total) * 100;
+  const rPct = (summary.endIdx / total) * 100;
+  const midPct = (lPct + rPct) / 2;
 
   return (
-    <div style={{ width: "100%", marginTop: 4, display: "flex", flexDirection: "column", alignItems: "center" }}>
-      <svg width="100%" height="32" style={{ overflow: "visible", display: "block" }} viewBox="0 0 100 32" preserveAspectRatio="none">
-        <path
-          d={`M ${leftPct + 1},2 Q ${leftPct},28 50,28 Q ${rightPct},28 ${rightPct - 1},2`}
-          fill="none" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke"
-        />
+    <div style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", marginTop: 2 }}>
+      {/* ブラケットSVG */}
+      <svg width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none" style={{ overflow: "visible", display: "block" }}>
+        {/* 左縦線 */}
+        <line x1={lPct} y1="2" x2={lPct} y2="18" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        {/* 右縦線 */}
+        <line x1={rPct} y1="2" x2={rPct} y2="18" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        {/* 横線 */}
+        <line x1={lPct} y1="18" x2={rPct} y2="18" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        {/* 中央への接続線 */}
+        <line x1={midPct} y1="18" x2={midPct} y2="28" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
       </svg>
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }} onDoubleClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}>
+
+      {/* まとめノード */}
+      <div
+        onClick={e => { e.stopPropagation(); onSelect(`summary-sel-${summary.id}`); }}
+        onDoubleClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}
+        style={{
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "6px 16px", borderRadius: 20,
+          background: isSummarySelected ? theme.rootBg : theme.surface,
+          color: isSummarySelected ? theme.rootText : theme.text,
+          border: `2px solid ${theme.line}`,
+          cursor: "pointer", userSelect: "none",
+          boxShadow: isSummarySelected
+            ? `0 0 0 3px ${theme.rootBg}33, 0 2px 8px ${theme.line}44`
+            : `0 2px 8px ${theme.line}22`,
+          transition: "all 0.15s",
+          fontSize: 13, fontWeight: 600,
+        }}
+      >
+        {/* サマリーアイコン */}
+        <span style={{ fontSize: 11, opacity: 0.7 }}>∑</span>
         {isEditingLabel ? (
           <input
             autoFocus value={editState!.value}
@@ -339,15 +378,34 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, o
               if (e.key === "Enter") { onUpdateLabel(editState!.value); setEditState(null); }
               if (e.key === "Escape") setEditState(null);
             }}
-            style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${theme.line}`, background: theme.nodeBg, color: theme.nodeText, fontSize: 12, fontWeight: 600, outline: "none", minWidth: 60 }}
+            style={{ background: "transparent", border: "none", outline: "none", color: "inherit", fontSize: "inherit", fontWeight: "inherit", minWidth: 60, width: Math.max((editState?.value.length ?? 1) * 9, 60) }}
           />
-        ) : (
-          <div style={{ padding: "4px 14px", borderRadius: 20, background: theme.nodeBg, color: theme.nodeText, border: `1.5px solid ${theme.line}`, fontSize: 12, fontWeight: 600, cursor: "pointer", userSelect: "none" }}>
-            {summary.label}
-          </div>
-        )}
-        <button onClick={onDelete} style={{ background: "none", border: "none", cursor: "pointer", color: theme.textMuted, fontSize: 11, padding: "0 2px" }}>✕</button>
+        ) : summary.label}
       </div>
+
+      {/* 選択時のアクションボタン */}
+      {isSummarySelected && (
+        <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
+          <Btn theme={theme} onClick={onAddChild}>+子ノード</Btn>
+          <Btn theme={theme} onClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}>編集</Btn>
+          <Btn theme={theme} onClick={onDelete} danger>削除</Btn>
+        </div>
+      )}
+
+      {/* サマリーの子ノード */}
+      {children.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <div style={{ width: 2, height: 16, background: theme.line }} />
+          {children.length > 1 && (
+            <div style={{ height: 2, background: theme.line, width: "calc(100% - 48px)", alignSelf: "center" }} />
+          )}
+          <div style={{ display: "flex", gap: 28, alignItems: "flex-start" }}>
+            {children.map((child, idx) => (
+              <div key={child.id}>{renderNode(child as ExtNodeObj, depth + 2, `summary-children-${summary.id}`, idx)}</div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -355,7 +413,7 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, o
 function Btn({ children, theme, onClick, danger, highlight }: { children: React.ReactNode; theme: Theme; onClick: () => void; danger?: boolean; highlight?: boolean }) {
   return (
     <button onClick={e => { e.stopPropagation(); onClick(); }} style={{
-      padding: "2px 8px", borderRadius: 4,
+      padding: "2px 9px", borderRadius: 4,
       border: `1px solid ${danger ? "#ef4444" : highlight ? theme.rootBg : theme.border}`,
       background: highlight ? theme.rootBg + "22" : theme.surface,
       color: danger ? "#ef4444" : highlight ? theme.rootBg : theme.text,
