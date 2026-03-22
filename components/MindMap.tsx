@@ -103,7 +103,7 @@ export default function MindMap({ pageId }: Props) {
       el: containerRef.current,
       direction: MindElixir.SIDE,
       draggable: true, editable: true,
-      contextMenu: true, toolBar: true, keypress: true,
+      contextMenu: true, toolBar: false, keypress: true,
       mouseSelectionButton: 0,
     });
     me.init(dataRef.current); // 最新データで初期化
