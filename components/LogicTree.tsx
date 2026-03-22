@@ -9,7 +9,8 @@ interface SummaryRange {
   label: string;
   startIdx: number;
   endIdx: number;
-  children: ExtNodeObj[]; // サマリーノードの子
+  children: ExtNodeObj[];
+  summaries?: SummaryRange[]; // ネストしたまとめ
 }
 
 interface ExtNodeObj extends NodeObj {
@@ -24,42 +25,119 @@ interface Props {
 }
 
 interface EditState { id: string; value: string; }
-interface SummarySelectMode { parentId: string; indices: Set<number>; }
+interface SummarySelectMode {
+  parentId: string;      // 通常: node id / サマリー内: summary id
+  summaryId?: string;    // set when selecting within a summary's children
+  indices: Set<number>;
+}
 
 function clone<T>(v: T): T { return JSON.parse(JSON.stringify(v)); }
 
 function findNode(root: ExtNodeObj, id: string): ExtNodeObj | null {
   if (root.id === id) return root;
   for (const c of root.children ?? []) { const r = findNode(c, id); if (r) return r; }
-  // サマリーの子も探す
   for (const s of root.summaries ?? []) {
     for (const c of s.children ?? []) { const r = findNode(c, id); if (r) return r; }
   }
   return null;
 }
+
+// 通常のchildren内を再帰 + サマリーのchildren内も再帰
 function findParent(root: ExtNodeObj, id: string): ExtNodeObj | null {
   for (const c of root.children ?? []) {
     if (c.id === id) return root;
     const r = findParent(c, id); if (r) return r;
   }
+  for (const s of root.summaries ?? []) {
+    for (const c of s.children ?? []) {
+      const r = findParent(c, id); if (r) return r;
+    }
+  }
   return null;
 }
-function findSummaryParent(root: ExtNodeObj, id: string): { parentNode: ExtNodeObj; summaryId: string } | null {
+
+// あるノードを直接の子として持つSummaryRangeを返す
+function findContainerSummary(root: ExtNodeObj, id: string): SummaryRange | null {
   for (const s of root.summaries ?? []) {
-    if ((s.children ?? []).some(c => c.id === id)) return { parentNode: root, summaryId: s.id };
+    if (s.children.some(c => c.id === id)) return s;
+    const inNested = findContainerInRange(s, id);
+    if (inNested) return inNested;
     for (const c of s.children ?? []) {
-      const r = findSummaryParent(c, id); if (r) return r;
+      const r = findContainerSummary(c, id); if (r) return r;
     }
   }
   for (const c of root.children ?? []) {
-    const r = findSummaryParent(c, id); if (r) return r;
+    const r = findContainerSummary(c, id); if (r) return r;
   }
   return null;
 }
+
+function findContainerInRange(s: SummaryRange, id: string): SummaryRange | null {
+  for (const ns of s.summaries ?? []) {
+    if (ns.children.some(c => c.id === id)) return ns;
+    const r = findContainerInRange(ns, id); if (r) return r;
+  }
+  return null;
+}
+
+function findSummaryById(root: ExtNodeObj, id: string): SummaryRange | null {
+  for (const s of root.summaries ?? []) {
+    if (s.id === id) return s;
+    const n = findInRange(s, id); if (n) return n;
+    for (const c of s.children ?? []) { const r = findSummaryById(c, id); if (r) return r; }
+  }
+  for (const c of root.children ?? []) { const r = findSummaryById(c, id); if (r) return r; }
+  return null;
+}
+
+function findInRange(s: SummaryRange, id: string): SummaryRange | null {
+  for (const ns of s.summaries ?? []) {
+    if (ns.id === id) return ns;
+    const r = findInRange(ns, id); if (r) return r;
+  }
+  return null;
+}
+
+function deleteSummaryById(root: ExtNodeObj, id: string): boolean {
+  if (root.summaries) {
+    const idx = root.summaries.findIndex(s => s.id === id);
+    if (idx !== -1) { root.summaries.splice(idx, 1); return true; }
+    for (const s of root.summaries) {
+      if (deleteFromRange(s, id)) return true;
+      for (const c of s.children ?? []) { if (deleteSummaryById(c, id)) return true; }
+    }
+  }
+  for (const c of root.children ?? []) { if (deleteSummaryById(c, id)) return true; }
+  return false;
+}
+
+function deleteFromRange(s: SummaryRange, id: string): boolean {
+  if (s.summaries) {
+    const idx = s.summaries.findIndex(ns => ns.id === id);
+    if (idx !== -1) { s.summaries.splice(idx, 1); return true; }
+    for (const ns of s.summaries) { if (deleteFromRange(ns, id)) return true; }
+  }
+  return false;
+}
+
 function removeNode(root: ExtNodeObj, id: string): boolean {
   const idx = (root.children ?? []).findIndex(c => c.id === id);
   if (idx !== -1) { root.children.splice(idx, 1); return true; }
-  return (root.children ?? []).some(c => removeNode(c, id));
+  if ((root.children ?? []).some(c => removeNode(c, id))) return true;
+  for (const s of root.summaries ?? []) {
+    if (removeFromRange(s, id)) return true;
+  }
+  return false;
+}
+
+function removeFromRange(s: SummaryRange, id: string): boolean {
+  const idx = s.children.findIndex(c => c.id === id);
+  if (idx !== -1) { s.children.splice(idx, 1); return true; }
+  if (s.children.some(c => removeNode(c, id))) return true;
+  for (const ns of s.summaries ?? []) {
+    if (removeFromRange(ns, id)) return true;
+  }
+  return false;
 }
 
 export default function LogicTree({ data, theme, onDataChange }: Props) {
@@ -85,12 +163,10 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
   }, [data, commit]);
 
-  // サマリーに子を追加
-  const addChildToSummary = useCallback((parentNodeId: string, summaryId: string) => {
+  const addChildToSummary = useCallback((summaryId: string) => {
     const newId = `node-${Date.now()}`;
     const u = clone(data);
-    const parent = findNode(u.nodeData as ExtNodeObj, parentNodeId);
-    const s = parent?.summaries?.find(s => s.id === summaryId);
+    const s = findSummaryById(u.nodeData as ExtNodeObj, summaryId);
     if (s) s.children = [...(s.children ?? []), { id: newId, topic: "新しいノード", children: [] }];
     commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
   }, [data, commit]);
@@ -98,50 +174,73 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
   const addSibling = useCallback((siblingId: string) => {
     const newId = `node-${Date.now()}`;
     const u = clone(data);
-    const parent = findParent(u.nodeData as ExtNodeObj, siblingId);
+    const uRoot = u.nodeData as ExtNodeObj;
+    const parent = findParent(uRoot, siblingId);
     if (parent) {
       const idx = parent.children.findIndex(c => c.id === siblingId);
       parent.children.splice(idx + 1, 0, { id: newId, topic: "新しいノード", children: [] });
       commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
       return;
     }
-    // サマリーの子の場合
-    const sp = findSummaryParent(u.nodeData as ExtNodeObj, siblingId);
-    if (sp) {
-      const s = sp.parentNode.summaries!.find(s => s.id === sp.summaryId)!;
-      const idx = s.children.findIndex(c => c.id === siblingId);
-      s.children.splice(idx + 1, 0, { id: newId, topic: "新しいノード", children: [] });
+    const container = findContainerSummary(uRoot, siblingId);
+    if (container) {
+      const idx = container.children.findIndex(c => c.id === siblingId);
+      container.children.splice(idx + 1, 0, { id: newId, topic: "新しいノード", children: [] });
       commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
     }
   }, [data, commit]);
 
   const del = useCallback((id: string) => {
     const u = clone(data);
-    const parent = findParent(u.nodeData as ExtNodeObj, id);
+    const uRoot = u.nodeData as ExtNodeObj;
+    const parent = findParent(uRoot, id);
     if (parent) {
       const idx = parent.children.findIndex(c => c.id === id);
-      if (parent.summaries && idx !== -1) {
+      if (idx !== -1 && parent.summaries) {
         parent.summaries = parent.summaries.filter(s => {
           if (idx < s.startIdx) { s.startIdx--; s.endIdx--; }
           else if (idx <= s.endIdx) { s.endIdx--; }
           return s.endIdx >= s.startIdx;
         });
       }
+    } else {
+      const container = findContainerSummary(uRoot, id);
+      if (container?.summaries) {
+        const idx = container.children.findIndex(c => c.id === id);
+        if (idx !== -1) {
+          container.summaries = container.summaries.filter(s => {
+            if (idx < s.startIdx) { s.startIdx--; s.endIdx--; }
+            else if (idx <= s.endIdx) { s.endIdx--; }
+            return s.endIdx >= s.startIdx;
+          });
+        }
+      }
     }
-    removeNode(u.nodeData as ExtNodeObj, id); commit(u);
-    setSelectedId(null); setSummaryMode(null);
+    removeNode(uRoot, id);
+    commit(u); setSelectedId(null); setSummaryMode(null);
   }, [data, commit]);
 
   const startSummaryMode = useCallback(() => {
     if (!selectedId) return;
     const parent = findParent(root, selectedId);
-    if (!parent) return;
-    const idx = parent.children.findIndex(c => c.id === selectedId);
-    setSummaryMode({ parentId: parent.id, indices: new Set([idx]) });
+    if (parent) {
+      const idx = parent.children.findIndex(c => c.id === selectedId);
+      setSummaryMode({ parentId: parent.id, indices: new Set([idx]) });
+      return;
+    }
+    const container = findContainerSummary(root, selectedId);
+    if (container) {
+      const idx = container.children.findIndex(c => c.id === selectedId);
+      setSummaryMode({ parentId: container.id, summaryId: container.id, indices: new Set([idx]) });
+    }
   }, [selectedId, root]);
 
   const toggleSummaryNode = useCallback((parentId: string, idx: number) => {
-    if (!summaryMode || summaryMode.parentId !== parentId) return;
+    if (!summaryMode) return;
+    const matches =
+      (!summaryMode.summaryId && summaryMode.parentId === parentId) ||
+      (summaryMode.summaryId && parentId === `summary-children-${summaryMode.summaryId}`);
+    if (!matches) return;
     const next = new Set(summaryMode.indices);
     if (next.has(idx)) next.delete(idx); else next.add(idx);
     setSummaryMode({ ...summaryMode, indices: next });
@@ -151,31 +250,36 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     if (!summaryMode || summaryMode.indices.size === 0) return;
     const sorted = [...summaryMode.indices].sort((a, b) => a - b);
     const u = clone(data);
-    const parent = findNode(u.nodeData as ExtNodeObj, summaryMode.parentId);
-    if (!parent) return;
-    const summaryId = `summary-${Date.now()}`;
-    parent.summaries = [...(parent.summaries ?? []), {
-      id: summaryId, label: "まとめ",
+    const newSummaryId = `summary-${Date.now()}`;
+    const newSummary: SummaryRange = {
+      id: newSummaryId, label: "まとめ",
       startIdx: sorted[0], endIdx: sorted[sorted.length - 1],
       children: [],
-    }];
+    };
+    if (summaryMode.summaryId) {
+      const s = findSummaryById(u.nodeData as ExtNodeObj, summaryMode.summaryId);
+      if (s) s.summaries = [...(s.summaries ?? []), newSummary];
+    } else {
+      const parent = findNode(u.nodeData as ExtNodeObj, summaryMode.parentId);
+      if (parent) parent.summaries = [...(parent.summaries ?? []), newSummary];
+    }
     commit(u); setSummaryMode(null);
-    setTimeout(() => setEditState({ id: `edit-summary-${summaryId}`, value: "まとめ" }), 50);
+    setTimeout(() => setEditState({ id: `edit-summary-${newSummaryId}`, value: "まとめ" }), 50);
   }, [summaryMode, data, commit]);
 
-  const deleteSummary = useCallback((parentId: string, summaryId: string) => {
-    const u = clone(data); const parent = findNode(u.nodeData as ExtNodeObj, parentId);
-    if (parent?.summaries) parent.summaries = parent.summaries.filter(s => s.id !== summaryId);
+  const deleteSummary = useCallback((summaryId: string) => {
+    const u = clone(data);
+    deleteSummaryById(u.nodeData as ExtNodeObj, summaryId);
     commit(u); setSelectedId(null);
   }, [data, commit]);
 
-  const updateSummaryLabel = useCallback((parentId: string, summaryId: string, label: string) => {
-    const u = clone(data); const parent = findNode(u.nodeData as ExtNodeObj, parentId);
-    const s = parent?.summaries?.find(s => s.id === summaryId); if (s) s.label = label;
+  const updateSummaryLabel = useCallback((summaryId: string, label: string) => {
+    const u = clone(data);
+    const s = findSummaryById(u.nodeData as ExtNodeObj, summaryId);
+    if (s) s.label = label;
     commit(u);
   }, [data, commit]);
 
-  // キーボード
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") { setSummaryMode(null); return; }
@@ -184,7 +288,6 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
       const parent = findParent(root, selectedId);
       const siblings = parent?.children ?? [];
       const sibIdx = siblings.findIndex(c => c.id === selectedId);
-
       if (e.key === "Tab") { e.preventDefault(); addChild(selectedId); }
       else if (e.key === "Enter") { e.preventDefault(); if (selectedId === root.id) addChild(selectedId); else addSibling(selectedId); }
       else if (e.key === "F2") { e.preventDefault(); setEditState({ id: selectedId, value: cur?.topic ?? "" }); }
@@ -202,13 +305,21 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
     const isRoot = depth === 0;
     const isEditing = editState?.id === node.id;
     const isSelected = selectedId === node.id;
-    const isInSummaryMode = summaryMode?.parentId === parentId;
+    const isInSummaryMode = summaryMode !== null && parentId !== null && (
+      (!summaryMode.summaryId && summaryMode.parentId === parentId) ||
+      (summaryMode.summaryId && parentId === `summary-children-${summaryMode.summaryId}`)
+    );
     const isInSummarySelection = isInSummaryMode && summaryMode!.indices.has(childIdx);
+    const canSummarize = !isRoot && (() => {
+      const p = findParent(root, node.id);
+      if (p) return p.children.length >= 2;
+      const container = findContainerSummary(root, node.id);
+      return (container?.children?.length ?? 0) >= 2;
+    })();
 
     return (
       <div key={node.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
         {!isRoot && <div style={{ width: 2, height: 20, background: theme.line }} />}
-
         <div
           tabIndex={0}
           onClick={e => {
@@ -249,17 +360,17 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
           <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
             <Btn theme={theme} onClick={() => addChild(node.id)}>+子</Btn>
             {!isRoot && <Btn theme={theme} onClick={() => addSibling(node.id)}>+兄弟</Btn>}
-            {/* 兄弟が2つ以上いる場合のみまとめを許可 */}
-            {!isRoot && (() => { const p = findParent(root, node.id); return p && p.children.length >= 2; })() && (
-              <Btn theme={theme} onClick={startSummaryMode} highlight>まとめ</Btn>
-            )}
+            {canSummarize && <Btn theme={theme} onClick={startSummaryMode} highlight>まとめ</Btn>}
             {!isRoot && <Btn theme={theme} onClick={() => del(node.id)} danger>✕</Btn>}
           </div>
         )}
 
         {(node.children ?? []).length > 0 && (
           <ChildrenWithSummaries
-            parent={node} depth={depth} theme={theme}
+            groupKey={node.id}
+            children={node.children as ExtNodeObj[]}
+            summaries={node.summaries ?? []}
+            depth={depth} theme={theme}
             editState={editState} setEditState={setEditState}
             summaryMode={summaryMode} selectedId={selectedId}
             renderNode={renderNode}
@@ -296,13 +407,11 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
           </button>
         </div>
       )}
-
       <div style={{ flex: 1, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 24px" }}>
         <div style={{ display: "inline-flex" }}>
           {renderNode(root)}
         </div>
       </div>
-
       <div style={{ position: "fixed", bottom: 10, right: 12, color: theme.textMuted, fontSize: 10, lineHeight: 1.8 }}>
         Tab:子 Enter:兄弟 ↑:親 ↓:子 ←→:兄弟移動 F2:編集 Del:削除
       </div>
@@ -310,19 +419,23 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
   );
 }
 
-function ChildrenWithSummaries({ parent, depth, theme, editState, setEditState, summaryMode, selectedId, renderNode, updateSummaryLabel, deleteSummary, addChildToSummary, onSelectSummary }: {
-  parent: ExtNodeObj; depth: number; theme: Theme;
+function ChildrenWithSummaries({
+  groupKey, children, summaries, depth, theme,
+  editState, setEditState, summaryMode, selectedId,
+  renderNode, updateSummaryLabel, deleteSummary, addChildToSummary, onSelectSummary,
+}: {
+  groupKey: string;
+  children: ExtNodeObj[];
+  summaries: SummaryRange[];
+  depth: number; theme: Theme;
   editState: EditState | null; setEditState: (s: EditState | null) => void;
   summaryMode: SummarySelectMode | null; selectedId: string | null;
   renderNode: (n: ExtNodeObj, d: number, pid: string | null, idx: number) => ReactElement;
-  updateSummaryLabel: (pid: string, sid: string, label: string) => void;
-  deleteSummary: (pid: string, sid: string) => void;
-  addChildToSummary: (pid: string, sid: string) => void;
+  updateSummaryLabel: (sid: string, label: string) => void;
+  deleteSummary: (sid: string) => void;
+  addChildToSummary: (sid: string) => void;
   onSelectSummary: (id: string) => void;
 }) {
-  const children = (parent.children ?? []) as ExtNodeObj[];
-  const summaries = parent.summaries ?? [];
-
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       <div style={{ width: 2, height: 16, background: theme.line }} />
@@ -332,7 +445,7 @@ function ChildrenWithSummaries({ parent, depth, theme, editState, setEditState, 
       <div style={{ display: "flex", flexDirection: "row", gap: 28, alignItems: "flex-start" }}>
         {children.map((child, idx) => (
           <div key={child.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-            {renderNode(child, depth + 1, parent.id, idx)}
+            {renderNode(child, depth + 1, groupKey, idx)}
           </div>
         ))}
       </div>
@@ -340,19 +453,26 @@ function ChildrenWithSummaries({ parent, depth, theme, editState, setEditState, 
         <SummaryBracket
           key={summary.id} summary={summary} childCount={children.length}
           theme={theme} editState={editState} setEditState={setEditState}
-          selectedId={selectedId}
-          renderNode={renderNode} depth={depth}
-          onUpdateLabel={label => updateSummaryLabel(parent.id, summary.id, label)}
-          onDelete={() => deleteSummary(parent.id, summary.id)}
-          onAddChild={() => addChildToSummary(parent.id, summary.id)}
+          selectedId={selectedId} renderNode={renderNode} depth={depth}
+          onUpdateLabel={label => updateSummaryLabel(summary.id, label)}
+          onDelete={() => deleteSummary(summary.id)}
+          onAddChild={() => addChildToSummary(summary.id)}
           onSelect={onSelectSummary}
+          updateSummaryLabel={updateSummaryLabel}
+          deleteSummary={deleteSummary}
+          addChildToSummary={addChildToSummary}
+          summaryMode={summaryMode}
         />
       ))}
     </div>
   );
 }
 
-function SummaryBracket({ summary, childCount, theme, editState, setEditState, selectedId, renderNode, depth, onUpdateLabel, onDelete, onAddChild, onSelect }: {
+function SummaryBracket({
+  summary, childCount, theme, editState, setEditState, selectedId,
+  renderNode, depth, onUpdateLabel, onDelete, onAddChild, onSelect,
+  updateSummaryLabel, deleteSummary, addChildToSummary, summaryMode,
+}: {
   summary: SummaryRange; childCount: number; theme: Theme;
   editState: EditState | null; setEditState: (s: EditState | null) => void;
   selectedId: string | null;
@@ -362,37 +482,29 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, s
   onDelete: () => void;
   onAddChild: () => void;
   onSelect: (id: string) => void;
+  updateSummaryLabel: (sid: string, label: string) => void;
+  deleteSummary: (sid: string) => void;
+  addChildToSummary: (sid: string) => void;
+  summaryMode: SummarySelectMode | null;
 }) {
   const isEditingLabel = editState?.id === `edit-summary-${summary.id}`;
   const isSummarySelected = selectedId === `summary-sel-${summary.id}`;
   const children = (summary.children ?? []) as ExtNodeObj[];
-
-  // ブラケット位置を比率で計算（0〜100）
   const total = Math.max(childCount - 1, 1);
   const lPct = childCount === 1 ? 10 : (summary.startIdx / total) * 80 + 10;
   const rPct = childCount === 1 ? 90 : (summary.endIdx / total) * 80 + 10;
   const mid = (lPct + rPct) / 2;
+  const groupKey = `summary-children-${summary.id}`;
 
   return (
     <div style={{ width: "100%", display: "flex", flexDirection: "column" }}>
-      {/* 滑らかなU字ブラケット + 中央接続線 */}
-      <svg
-        width="100%" height="44"
-        viewBox="0 0 100 44" preserveAspectRatio="none"
-        style={{ overflow: "visible", display: "block" }}
-      >
-        <path
-          d={`M ${lPct},2 Q ${lPct},36 ${mid},36 Q ${rPct},36 ${rPct},2`}
-          fill="none" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke"
-        />
+      <svg width="100%" height="44" viewBox="0 0 100 44" preserveAspectRatio="none" style={{ overflow: "visible", display: "block" }}>
+        <path d={`M ${lPct},2 Q ${lPct},36 ${mid},36 Q ${rPct},36 ${rPct},2`} fill="none" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
         <line x1={mid} y1="36" x2={mid} y2="44" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
       </svg>
-
-      {/* mid% の位置にまとめノードを配置 */}
       <div style={{ width: "100%", display: "flex", justifyContent: "flex-start" }}>
         <div style={{ flexShrink: 0, width: `${mid}%` }} />
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)" }}>
-          {/* まとめノード（角丸長方形） */}
           <div
             onClick={e => { e.stopPropagation(); onSelect(`summary-sel-${summary.id}`); }}
             onDoubleClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}
@@ -420,8 +532,6 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, s
               />
             ) : summary.label}
           </div>
-
-      {/* 選択時アクション */}
           {isSummarySelected && (
             <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
               <Btn theme={theme} onClick={onAddChild}>+子ノード</Btn>
@@ -429,20 +539,20 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, s
               <Btn theme={theme} onClick={onDelete} danger>削除</Btn>
             </div>
           )}
-
-          {/* まとめの子ノード */}
           {children.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-              <div style={{ width: 2, height: 16, background: theme.line }} />
-              {children.length > 1 && (
-                <div style={{ height: 2, background: theme.line, width: "calc(100% - 48px)", alignSelf: "center" }} />
-              )}
-              <div style={{ display: "flex", gap: 28, alignItems: "flex-start" }}>
-                {children.map((child, idx) => (
-                  <div key={child.id}>{renderNode(child as ExtNodeObj, depth + 2, `summary-children-${summary.id}`, idx)}</div>
-                ))}
-              </div>
-            </div>
+            <ChildrenWithSummaries
+              groupKey={groupKey}
+              children={children}
+              summaries={summary.summaries ?? []}
+              depth={depth + 1} theme={theme}
+              editState={editState} setEditState={setEditState}
+              summaryMode={summaryMode} selectedId={selectedId}
+              renderNode={renderNode}
+              updateSummaryLabel={updateSummaryLabel}
+              deleteSummary={deleteSummary}
+              addChildToSummary={addChildToSummary}
+              onSelectSummary={onSelect}
+            />
           )}
         </div>
       </div>
