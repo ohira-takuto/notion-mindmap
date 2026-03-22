@@ -112,15 +112,15 @@ export default function MindMap({ pageId }: Props) {
   }[status];
 
   return (
-    <div className="flex flex-col h-screen bg-gray-950">
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100vw", background: "#030712" }}>
       {/* ヘッダー */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-700">
-        <span className="text-white text-sm font-medium">Notion MindMap</span>
-        <span className={`text-xs ${statusColor}`}>{statusLabel}</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", background: "#111827", borderBottom: "1px solid #374151", flexShrink: 0 }}>
+        <span style={{ color: "#fff", fontSize: "14px", fontWeight: 500 }}>Notion MindMap</span>
+        <span style={{ color: statusColor === "text-green-400" ? "#4ade80" : statusColor === "text-yellow-400" ? "#facc15" : statusColor === "text-red-400" ? "#f87171" : "#9ca3af", fontSize: "12px" }}>{statusLabel}</span>
       </div>
 
       {/* マインドマップ本体 */}
-      <div ref={containerRef} className="flex-1 w-full" />
+      <div ref={containerRef} style={{ flex: 1, width: "100%", minHeight: 0 }} />
     </div>
   );
 }
