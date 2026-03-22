@@ -44,6 +44,18 @@ function findParent(root: ExtNodeObj, id: string): ExtNodeObj | null {
   }
   return null;
 }
+function findSummaryParent(root: ExtNodeObj, id: string): { parentNode: ExtNodeObj; summaryId: string } | null {
+  for (const s of root.summaries ?? []) {
+    if ((s.children ?? []).some(c => c.id === id)) return { parentNode: root, summaryId: s.id };
+    for (const c of s.children ?? []) {
+      const r = findSummaryParent(c, id); if (r) return r;
+    }
+  }
+  for (const c of root.children ?? []) {
+    const r = findSummaryParent(c, id); if (r) return r;
+  }
+  return null;
+}
 function removeNode(root: ExtNodeObj, id: string): boolean {
   const idx = (root.children ?? []).findIndex(c => c.id === id);
   if (idx !== -1) { root.children.splice(idx, 1); return true; }
@@ -85,11 +97,22 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
 
   const addSibling = useCallback((siblingId: string) => {
     const newId = `node-${Date.now()}`;
-    const u = clone(data); const parent = findParent(u.nodeData as ExtNodeObj, siblingId);
-    if (!parent) return;
-    const idx = parent.children.findIndex(c => c.id === siblingId);
-    parent.children.splice(idx + 1, 0, { id: newId, topic: "新しいノード", children: [] });
-    commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
+    const u = clone(data);
+    const parent = findParent(u.nodeData as ExtNodeObj, siblingId);
+    if (parent) {
+      const idx = parent.children.findIndex(c => c.id === siblingId);
+      parent.children.splice(idx + 1, 0, { id: newId, topic: "新しいノード", children: [] });
+      commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
+      return;
+    }
+    // サマリーの子の場合
+    const sp = findSummaryParent(u.nodeData as ExtNodeObj, siblingId);
+    if (sp) {
+      const s = sp.parentNode.summaries!.find(s => s.id === sp.summaryId)!;
+      const idx = s.children.findIndex(c => c.id === siblingId);
+      s.children.splice(idx + 1, 0, { id: newId, topic: "新しいノード", children: [] });
+      commit(u); setTimeout(() => { setSelectedId(newId); setEditState({ id: newId, value: "新しいノード" }); }, 50);
+    }
   }, [data, commit]);
 
   const del = useCallback((id: string) => {
