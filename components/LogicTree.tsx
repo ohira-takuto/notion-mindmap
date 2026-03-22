@@ -93,7 +93,19 @@ export default function LogicTree({ data, theme, onDataChange }: Props) {
   }, [data, commit]);
 
   const del = useCallback((id: string) => {
-    const u = clone(data); removeNode(u.nodeData as ExtNodeObj, id); commit(u);
+    const u = clone(data);
+    const parent = findParent(u.nodeData as ExtNodeObj, id);
+    if (parent) {
+      const idx = parent.children.findIndex(c => c.id === id);
+      if (parent.summaries && idx !== -1) {
+        parent.summaries = parent.summaries.filter(s => {
+          if (idx < s.startIdx) { s.startIdx--; s.endIdx--; }
+          else if (idx <= s.endIdx) { s.endIdx--; }
+          return s.endIdx >= s.startIdx;
+        });
+      }
+    }
+    removeNode(u.nodeData as ExtNodeObj, id); commit(u);
     setSelectedId(null); setSummaryMode(null);
   }, [data, commit]);
 
