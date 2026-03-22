@@ -374,83 +374,78 @@ function SummaryBracket({ summary, childCount, theme, editState, setEditState, s
   const mid = (lPct + rPct) / 2;
 
   return (
-    <div style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", marginTop: 0 }}>
+    <div style={{ width: "100%", display: "flex", flexDirection: "column" }}>
       {/* 滑らかなU字ブラケット + 中央接続線 */}
       <svg
         width="100%" height="44"
         viewBox="0 0 100 44" preserveAspectRatio="none"
         style={{ overflow: "visible", display: "block" }}
       >
-        {/* U字カーブ：lPctからrPctへ、中央が一番下 */}
         <path
           d={`M ${lPct},2 Q ${lPct},36 ${mid},36 Q ${rPct},36 ${rPct},2`}
-          fill="none"
-          stroke={theme.line}
-          strokeWidth="1.5"
-          vectorEffect="non-scaling-stroke"
+          fill="none" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke"
         />
-        {/* 中央からまとめノードへの接続線 */}
-        <line
-          x1={mid} y1="36" x2={mid} y2="44"
-          stroke={theme.line} strokeWidth="1.5"
-          vectorEffect="non-scaling-stroke"
-        />
+        <line x1={mid} y1="36" x2={mid} y2="44" stroke={theme.line} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
       </svg>
 
-      {/* まとめノード（角丸長方形） */}
-      <div
-        onClick={e => { e.stopPropagation(); onSelect(`summary-sel-${summary.id}`); }}
-        onDoubleClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}
-        style={{
-          padding: "6px 18px",
-          borderRadius: 8,
-          background: isSummarySelected ? theme.rootBg + "18" : theme.bg,
-          color: isSummarySelected ? theme.rootBg : theme.nodeText,
-          border: `2px solid ${isSummarySelected ? theme.rootBg : theme.line}`,
-          cursor: "pointer", userSelect: "none",
-          fontSize: 13, fontWeight: 600,
-          transition: "all 0.15s",
-          boxShadow: isSummarySelected ? `0 0 0 3px ${theme.rootBg}22` : "none",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {isEditingLabel ? (
-          <input
-            autoFocus value={editState!.value}
-            onChange={e => setEditState({ ...editState!, value: e.target.value })}
-            onBlur={() => { onUpdateLabel(editState!.value); setEditState(null); }}
-            onKeyDown={e => {
-              if (e.key === "Enter") { onUpdateLabel(editState!.value); setEditState(null); }
-              if (e.key === "Escape") setEditState(null);
+      {/* mid% の位置にまとめノードを配置 */}
+      <div style={{ width: "100%", display: "flex", justifyContent: "flex-start" }}>
+        <div style={{ flexShrink: 0, width: `${mid}%` }} />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)" }}>
+          {/* まとめノード（角丸長方形） */}
+          <div
+            onClick={e => { e.stopPropagation(); onSelect(`summary-sel-${summary.id}`); }}
+            onDoubleClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}
+            style={{
+              padding: "6px 18px", borderRadius: 8,
+              background: isSummarySelected ? theme.rootBg + "18" : theme.bg,
+              color: isSummarySelected ? theme.rootBg : theme.nodeText,
+              border: `2px solid ${isSummarySelected ? theme.rootBg : theme.line}`,
+              cursor: "pointer", userSelect: "none",
+              fontSize: 13, fontWeight: 600, transition: "all 0.15s",
+              boxShadow: isSummarySelected ? `0 0 0 3px ${theme.rootBg}22` : "none",
+              whiteSpace: "nowrap",
             }}
-            style={{ background: "transparent", border: "none", outline: "none", color: "inherit", fontSize: "inherit", fontWeight: "inherit", minWidth: 60, width: Math.max((editState?.value.length ?? 1) * 9, 60) }}
-          />
-        ) : summary.label}
-      </div>
+          >
+            {isEditingLabel ? (
+              <input
+                autoFocus value={editState!.value}
+                onChange={e => setEditState({ ...editState!, value: e.target.value })}
+                onBlur={() => { onUpdateLabel(editState!.value); setEditState(null); }}
+                onKeyDown={e => {
+                  if (e.key === "Enter") { onUpdateLabel(editState!.value); setEditState(null); }
+                  if (e.key === "Escape") setEditState(null);
+                }}
+                style={{ background: "transparent", border: "none", outline: "none", color: "inherit", fontSize: "inherit", fontWeight: "inherit", minWidth: 60, width: Math.max((editState?.value.length ?? 1) * 9, 60) }}
+              />
+            ) : summary.label}
+          </div>
 
       {/* 選択時アクション */}
-      {isSummarySelected && (
-        <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
-          <Btn theme={theme} onClick={onAddChild}>+子ノード</Btn>
-          <Btn theme={theme} onClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}>編集</Btn>
-          <Btn theme={theme} onClick={onDelete} danger>削除</Btn>
-        </div>
-      )}
-
-      {/* まとめの子ノード */}
-      {children.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ width: 2, height: 16, background: theme.line }} />
-          {children.length > 1 && (
-            <div style={{ height: 2, background: theme.line, width: "calc(100% - 48px)", alignSelf: "center" }} />
+          {isSummarySelected && (
+            <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
+              <Btn theme={theme} onClick={onAddChild}>+子ノード</Btn>
+              <Btn theme={theme} onClick={() => setEditState({ id: `edit-summary-${summary.id}`, value: summary.label })}>編集</Btn>
+              <Btn theme={theme} onClick={onDelete} danger>削除</Btn>
+            </div>
           )}
-          <div style={{ display: "flex", gap: 28, alignItems: "flex-start" }}>
-            {children.map((child, idx) => (
-              <div key={child.id}>{renderNode(child as ExtNodeObj, depth + 2, `summary-children-${summary.id}`, idx)}</div>
-            ))}
-          </div>
+
+          {/* まとめの子ノード */}
+          {children.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <div style={{ width: 2, height: 16, background: theme.line }} />
+              {children.length > 1 && (
+                <div style={{ height: 2, background: theme.line, width: "calc(100% - 48px)", alignSelf: "center" }} />
+              )}
+              <div style={{ display: "flex", gap: 28, alignItems: "flex-start" }}>
+                {children.map((child, idx) => (
+                  <div key={child.id}>{renderNode(child as ExtNodeObj, depth + 2, `summary-children-${summary.id}`, idx)}</div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
